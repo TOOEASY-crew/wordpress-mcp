@@ -44,17 +44,17 @@ for (const tool of allTools) {
     // console.log(`Input schema: ${JSON.stringify(tool.inputSchema)}`);
 
     // const zodSchema = z.any().optional();
-    // const jsonSchema = zodToJsonSchema(z.object(tool.inputSchema.properties as z.ZodRawShape));
+    // const jsonSchema = zodToJsonSchema(z.object(tool.inputSchema.properties as any));
 
-    // const schema = z.object(tool.inputSchema as z.ZodRawShape).catchall(z.unknown());
-    
+    // const schema = z.object(tool.inputSchema as any).catchall(z.unknown());
+
     // The inputSchema is already in JSON Schema format with properties
     // server.tool(tool.name, tool.inputSchema.shape, wrappedHandler);
     // const zodSchema = z.any().optional();
-    // const jsonSchema = zodToJsonSchema(z.object(tool.inputSchema.properties as z.ZodRawShape));
+    // const jsonSchema = zodToJsonSchema(z.object(tool.inputSchema.properties as any));
     // const parsedSchema = z.any().optional().parse(jsonSchema);
 
-    const zodSchema = z.object(tool.inputSchema.properties as z.ZodRawShape); 
+    const zodSchema = z.object(tool.inputSchema.properties as any);
     server.tool(tool.name, zodSchema.shape, wrappedHandler)
 
 }
