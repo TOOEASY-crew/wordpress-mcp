@@ -1,5 +1,5 @@
 {
-  "name": "@tooeasy/wordpress-mcp",
+  "name": "@junis/wordpress-mcp",
   "version": "1.0.0",
   "description": "A Model Context Protocol server for interacting with WordPress.",
   "type": "module",
@@ -24,7 +24,7 @@
     "server",
     "claude",
     "ai",
-    "tooeasy"
+    "junis"
   ],
   "author": "TOOEASY",
   "license": "GPL-3.0-or-later",
