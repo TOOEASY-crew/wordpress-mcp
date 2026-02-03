@@ -1,12 +1,12 @@
 {
-  "name": "@instawp/mcp-wp",
-  "version": "0.0.3",
+  "name": "@tooeasy/wordpress-mcp",
+  "version": "1.0.0",
   "description": "A Model Context Protocol server for interacting with WordPress.",
   "type": "module",
   "main": "./build/server.js",
   "exports": "./build/server.js",
   "bin": {
-    "mcp-wp": "./build/server.js"
+    "wordpress-mcp": "./build/server.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -24,9 +24,9 @@
     "server",
     "claude",
     "ai",
-    "instawp"
+    "tooeasy"
   ],
-  "author": "Claude",
+  "author": "TOOEASY",
   "license": "GPL-3.0-or-later",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.1",
