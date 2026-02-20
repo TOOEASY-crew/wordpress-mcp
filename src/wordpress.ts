@@ -167,12 +167,14 @@ Data: ${JSON.stringify(error.response?.data || {}, null, 2)}
 }
 
 /**
- * Make a request to any WordPress REST API namespace (e.g., acf/v3, wc/v3)
+ * Make a request to any WordPress REST API namespace (e.g., wc/v3)
  * Unlike makeWordPressRequest which is locked to /wp/v2/, this function
  * can access any REST API namespace while reusing the same authentication.
+ * Supports optional auth override for APIs that require their own credentials
+ * (e.g., WooCommerce Consumer Key/Secret).
  *
  * @param method HTTP method
- * @param namespacedEndpoint API endpoint relative to /wp-json/ (e.g., 'acf/v3/posts/123', 'wc/v3/products')
+ * @param namespacedEndpoint API endpoint relative to /wp-json/ (e.g., 'wc/v3/products')
  * @param data Request data
  * @param options Additional request options
  * @returns Response data
@@ -184,6 +186,7 @@ export async function makeWordPressGenericRequest(
   options?: {
     headers?: Record<string, string>;
     rawResponse?: boolean;
+    auth?: { username: string; password: string };
   }
 ) {
   if (!wpClient) {
@@ -197,15 +200,21 @@ export async function makeWordPressGenericRequest(
   const cleanPath = namespacedEndpoint.startsWith('/') ? namespacedEndpoint.substring(1) : namespacedEndpoint;
   const fullUrl = `${wpJsonRoot}${cleanPath}`;
 
-  if (!options || !('headers' in options)) {
-    logToFile(`Generic API Data: ${JSON.stringify(data, null, 2)}`);
-  }
+  logToFile(`Generic API Data: ${JSON.stringify(data, null, 2)}`);
 
   try {
+    const requestHeaders: Record<string, string> = { ...(options?.headers || {}) };
+
+    // If auth override is provided, use it (e.g., WooCommerce Consumer Key/Secret)
+    if (options?.auth) {
+      const authStr = Buffer.from(`${options.auth.username}:${options.auth.password}`).toString('base64');
+      requestHeaders['Authorization'] = `Basic ${authStr}`;
+    }
+
     const requestConfig: any = {
       method,
       url: fullUrl, // Absolute URL — Axios ignores baseURL for absolute URLs
-      headers: options?.headers || {}
+      headers: requestHeaders
     };
 
     if (method === 'GET') {
@@ -223,13 +232,15 @@ export async function makeWordPressGenericRequest(
 GENERIC API REQUEST:
 URL: ${fullUrl}
 Method: ${method}
-Headers: ${JSON.stringify(requestConfig.headers, null, 2)}
 Data: ${JSON.stringify(data, null, 2)}
 `;
     logToFile(requestLog);
 
-    // Use wpClient.request() so auth headers are automatically included
-    const response = await wpClient.request(requestConfig);
+    // If custom auth is provided, use raw axios to avoid wpClient's default auth headers
+    // Otherwise use wpClient which includes WordPress App Password auth
+    const response = options?.auth
+      ? await axios.request(requestConfig)
+      : await wpClient.request(requestConfig);
 
     const responseLog = `
 GENERIC API RESPONSE:

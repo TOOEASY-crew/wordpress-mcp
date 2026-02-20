@@ -16,7 +16,7 @@ export const allTools: Tool[] = [
   ...unifiedContentTools,        // 8 tools (replaces posts, pages, custom-post-types)
   ...unifiedTaxonomyTools,       // 8 tools (replaces categories, custom-taxonomies)
   ...wooCommerceTools,           // 4 tools (WooCommerce products: pricing, meta/ACF, stock, variations)
-  ...acfTools,                   // 4 tools (ACF fields: get, update, options, bulk list)
+  ...acfTools,                   // 3 tools (ACF fields: get, update, bulk list via standard /wp/v2/ endpoints)
   ...pluginTools,               // ~5 tools
   ...mediaTools,                // ~4 tools
   ...userTools,                 // ~5 tools

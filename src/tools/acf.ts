@@ -1,12 +1,14 @@
 // src/tools/acf.ts
-// ACF (Advanced Custom Fields) REST API tools
-// Uses /wp-json/acf/v3/ endpoints (requires ACF 5.11+ with REST API enabled)
+// ACF (Advanced Custom Fields) tools using standard WordPress REST API
+// Since ACF 5.11, ACF fields are exposed via standard /wp/v2/ endpoints (NOT a separate /acf/v3/ namespace).
+// Requires: "Show in REST API" enabled per field group in ACF settings.
+// See: https://www.advancedcustomfields.com/resources/wp-rest-api-integration/
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { makeWordPressGenericRequest, logToFile } from '../wordpress.js';
+import { makeWordPressRequest, logToFile } from '../wordpress.js';
 import { z } from 'zod';
 
 // --- Helper: Map content type to REST API base ---
-function getAcfEndpointBase(contentType: string): string {
+function getContentEndpoint(contentType: string): string {
   const endpointMap: Record<string, string> = {
     'post': 'posts',
     'page': 'pages'
@@ -27,10 +29,6 @@ const updateAcfFieldsSchema = z.object({
   fields: z.record(z.any()).describe("ACF field values as key-value pairs (e.g., { ingredients: 'Water, Glycerin...', volume: '100ml', how_to_use: 'Apply evenly...', price_krw: 35000 })")
 });
 
-const getAcfOptionsSchema = z.object({
-  field_name: z.string().optional().describe("Specific ACF options field name to retrieve. If omitted, returns all options page fields.")
-});
-
 const listAcfContentFieldsSchema = z.object({
   content_type: z.string().describe("Content type slug (e.g., 'post', 'page', 'product')"),
   per_page: z.number().min(1).max(100).optional().describe("Number of items to fetch (default 10)"),
@@ -40,29 +38,23 @@ const listAcfContentFieldsSchema = z.object({
 // --- Type Definitions ---
 type GetAcfFieldsParams = z.infer<typeof getAcfFieldsSchema>;
 type UpdateAcfFieldsParams = z.infer<typeof updateAcfFieldsSchema>;
-type GetAcfOptionsParams = z.infer<typeof getAcfOptionsSchema>;
 type ListAcfContentFieldsParams = z.infer<typeof listAcfContentFieldsSchema>;
 
 // --- Tool Definitions ---
 export const acfTools: Tool[] = [
   {
     name: "get_acf_fields",
-    description: "Get all ACF (Advanced Custom Fields) field values for a specific post, page, or custom post type. Returns fields like ingredients, volume, how_to_use, price_krw, etc. Uses the dedicated ACF REST API endpoint /acf/v3/{content_type}/{id}.",
+    description: "Get all ACF (Advanced Custom Fields) field values for a specific post, page, or custom post type. Returns fields like ingredients, volume, how_to_use, price_krw, etc. Uses standard WordPress REST API GET /wp/v2/{content_type}/{id} with acf_format=standard. Requires 'Show in REST API' enabled in ACF field group settings.",
     inputSchema: { type: "object", properties: getAcfFieldsSchema.shape }
   },
   {
     name: "update_acf_fields",
-    description: "Update ACF field values for a specific post, page, or custom post type. Pass field names and values as key-value pairs. Uses PUT /acf/v3/{content_type}/{id}.",
+    description: "Update ACF field values for a specific post, page, or custom post type. Pass field names and values as key-value pairs. Uses standard WordPress REST API POST /wp/v2/{content_type}/{id} with { acf: { ... } } payload.",
     inputSchema: { type: "object", properties: updateAcfFieldsSchema.shape }
   },
   {
-    name: "get_acf_options",
-    description: "Get ACF Options page field values. Options pages store global settings (e.g., site-wide pricing rules, global ingredients lists). Uses /acf/v3/options/{field_name} or /acf/v3/options for all fields.",
-    inputSchema: { type: "object", properties: getAcfOptionsSchema.shape }
-  },
-  {
     name: "list_acf_content_fields",
-    description: "List ACF field values for multiple items of a content type at once. Useful for bulk scanning all products' ACF fields (ingredients, volume, etc.). Returns ACF data for each item.",
+    description: "List ACF field values for multiple items of a content type at once. Useful for bulk scanning all products' ACF fields (ingredients, volume, etc.). Returns only id and acf data for each item, minimizing response size.",
     inputSchema: { type: "object", properties: listAcfContentFieldsSchema.shape }
   }
 ];
@@ -71,12 +63,18 @@ export const acfTools: Tool[] = [
 export const acfHandlers = {
   get_acf_fields: async (params: GetAcfFieldsParams) => {
     try {
-      const base = getAcfEndpointBase(params.content_type);
+      const endpoint = getContentEndpoint(params.content_type);
       logToFile(`Getting ACF fields for ${params.content_type} ID: ${params.id}`);
 
-      const response = await makeWordPressGenericRequest(
+      // Use standard WP REST API with _fields=id,acf to only return ACF data
+      // acf_format=standard applies ACF's full formatting (e.g., expanded image data)
+      const response = await makeWordPressRequest(
         'GET',
-        `acf/v3/${base}/${params.id}`
+        `${endpoint}/${params.id}`,
+        {
+          _fields: 'id,title,acf',
+          acf_format: 'standard'
+        }
       );
 
       return {
@@ -85,8 +83,9 @@ export const acfHandlers = {
             type: 'text',
             text: JSON.stringify({
               content_type: params.content_type,
-              content_id: params.id,
-              acf_fields: response?.acf || response
+              content_id: response?.id || params.id,
+              title: response?.title?.rendered || null,
+              acf_fields: response?.acf || null
             }, null, 2)
           }],
           isError: false
@@ -96,9 +95,15 @@ export const acfHandlers = {
       const status = error.response?.status;
       let hint = '';
       if (status === 404) {
-        hint = '\n\nACF REST API endpoint not found. Possible causes:\n1. ACF plugin is not installed or activated\n2. ACF REST API is not enabled (ACF → Settings → Enable REST API)\n3. The content type or ID does not exist\n\nAlternative: Use get_content with content_type parameter — ACF fields may appear in the "acf" key if ACF REST support is enabled globally.';
+        hint = '\n\nContent not found. Verify the content_type and id are correct.';
       } else if (status === 401 || status === 403) {
-        hint = '\n\nAuthentication/permission error. Ensure the WordPress user has permission to read ACF fields.';
+        hint = '\n\nAuthentication/permission error. Ensure the WordPress user has read permissions.';
+      }
+
+      // Check if acf key is missing from response (ACF not configured for REST)
+      const responseData = error.response?.data;
+      if (responseData && !responseData.acf) {
+        hint += '\n\nNote: If "acf" key is not in the response, ensure "Show in REST API" is enabled in ACF field group settings (ACF → Field Groups → [Group] → Settings → Show in REST API).';
       }
 
       return {
@@ -115,13 +120,15 @@ export const acfHandlers = {
 
   update_acf_fields: async (params: UpdateAcfFieldsParams) => {
     try {
-      const base = getAcfEndpointBase(params.content_type);
+      const endpoint = getContentEndpoint(params.content_type);
       logToFile(`Updating ACF fields for ${params.content_type} ID: ${params.id}`);
       logToFile(`Fields: ${JSON.stringify(params.fields)}`);
 
-      const response = await makeWordPressGenericRequest(
-        'PUT',
-        `acf/v3/${base}/${params.id}`,
+      // Standard WP REST API: POST /wp/v2/{type}/{id} with { acf: { field: value } }
+      // See: https://www.advancedcustomfields.com/resources/wp-rest-api-integration/
+      const response = await makeWordPressRequest(
+        'POST',
+        `${endpoint}/${params.id}`,
         { acf: params.fields }
       );
 
@@ -131,9 +138,9 @@ export const acfHandlers = {
             type: 'text',
             text: JSON.stringify({
               content_type: params.content_type,
-              content_id: params.id,
+              content_id: response?.id || params.id,
               updated: true,
-              acf_fields: response?.acf || response
+              acf_fields: response?.acf || null
             }, null, 2)
           }],
           isError: false
@@ -143,7 +150,7 @@ export const acfHandlers = {
       const status = error.response?.status;
       let hint = '';
       if (status === 404) {
-        hint = '\n\nACF REST API endpoint not found. Ensure ACF plugin is installed and REST API is enabled.';
+        hint = '\n\nContent not found. Verify the content_type and id are correct.';
       } else if (status === 401 || status === 403) {
         hint = '\n\nPermission denied. Ensure the WordPress user has edit permissions for this content.';
       }
@@ -160,68 +167,27 @@ export const acfHandlers = {
     }
   },
 
-  get_acf_options: async (params: GetAcfOptionsParams) => {
-    try {
-      const endpoint = params.field_name
-        ? `acf/v3/options/${params.field_name}`
-        : 'acf/v3/options';
-
-      logToFile(`Getting ACF options: ${endpoint}`);
-
-      const response = await makeWordPressGenericRequest('GET', endpoint);
-
-      return {
-        toolResult: {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              field_name: params.field_name || '(all options)',
-              options: response?.acf || response
-            }, null, 2)
-          }],
-          isError: false
-        }
-      };
-    } catch (error: any) {
-      const status = error.response?.status;
-      let hint = '';
-      if (status === 404) {
-        hint = '\n\nACF Options page REST endpoint not found. Ensure:\n1. ACF Pro is installed (Options pages require ACF Pro)\n2. Options page has been registered\n3. ACF REST API is enabled';
-      }
-
-      return {
-        toolResult: {
-          content: [{
-            type: 'text',
-            text: `Error getting ACF options: ${error.message}${hint}`
-          }],
-          isError: true
-        }
-      };
-    }
-  },
-
   list_acf_content_fields: async (params: ListAcfContentFieldsParams) => {
     try {
-      const base = getAcfEndpointBase(params.content_type);
+      const endpoint = getContentEndpoint(params.content_type);
       const queryParams: any = {
         per_page: params.per_page || 10,
-        page: params.page || 1
+        page: params.page || 1,
+        _fields: 'id,title,slug,acf',
+        acf_format: 'standard'
       };
 
       logToFile(`Listing ACF fields for ${params.content_type} (page ${queryParams.page}, per_page ${queryParams.per_page})`);
 
-      const response = await makeWordPressGenericRequest(
-        'GET',
-        `acf/v3/${base}`,
-        queryParams
-      );
+      const response = await makeWordPressRequest('GET', endpoint, queryParams);
 
-      // Format: each item should show its ID and ACF fields
+      // Format: extract only id, title, and acf from each item
       const items = Array.isArray(response)
         ? response.map((item: any) => ({
             id: item.id,
-            acf: item.acf || item
+            title: item.title?.rendered || null,
+            slug: item.slug || null,
+            acf: item.acf || null
           }))
         : response;
 

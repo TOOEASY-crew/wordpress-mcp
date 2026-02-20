@@ -1,8 +1,23 @@
 // src/tools/woocommerce.ts
 // WooCommerce REST API tools for product data (price, meta_data/ACF fields, stock, variations, etc.)
+// Auth: WooCommerce REST API uses Consumer Key/Secret (set WOO_CONSUMER_KEY & WOO_CONSUMER_SECRET env vars).
+// Falls back to WordPress Application Password auth if Consumer Key/Secret not provided.
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { makeWordPressGenericRequest, logToFile } from '../wordpress.js';
 import { z } from 'zod';
+
+// --- WooCommerce Authentication Helper ---
+// WooCommerce REST API officially requires Consumer Key/Secret for authentication.
+// See: https://woocommerce.github.io/woocommerce-rest-api-docs/#authentication
+function getWooAuth(): { username: string; password: string } | undefined {
+  const consumerKey = process.env.WOO_CONSUMER_KEY;
+  const consumerSecret = process.env.WOO_CONSUMER_SECRET;
+  if (consumerKey && consumerSecret) {
+    return { username: consumerKey, password: consumerSecret };
+  }
+  // Fallback: no auth override — will use WordPress Application Password via wpClient
+  return undefined;
+}
 
 // --- Schema Definitions ---
 
@@ -146,7 +161,7 @@ export const wooCommerceHandlers = {
     try {
       logToFile(`Listing WooCommerce products with params: ${JSON.stringify(params)}`);
 
-      const response = await makeWordPressGenericRequest('GET', 'wc/v3/products', params);
+      const response = await makeWordPressGenericRequest('GET', 'wc/v3/products', params, { auth: getWooAuth() });
 
       const products = Array.isArray(response)
         ? response.map(formatProductSummary)
@@ -178,7 +193,7 @@ export const wooCommerceHandlers = {
     try {
       logToFile(`Getting WooCommerce product ID: ${params.id}`);
 
-      const response = await makeWordPressGenericRequest('GET', `wc/v3/products/${params.id}`);
+      const response = await makeWordPressGenericRequest('GET', `wc/v3/products/${params.id}`, undefined, { auth: getWooAuth() });
       const formatted = formatProductSummary(response);
 
       return {
@@ -214,7 +229,8 @@ export const wooCommerceHandlers = {
       const response = await makeWordPressGenericRequest(
         'GET',
         `wc/v3/products/${params.product_id}/variations`,
-        queryParams
+        queryParams,
+        { auth: getWooAuth() }
       );
 
       const variations = Array.isArray(response)
@@ -281,7 +297,7 @@ export const wooCommerceHandlers = {
         per_page: params.per_page || 10
       };
 
-      const response = await makeWordPressGenericRequest('GET', 'wc/v3/products', queryParams);
+      const response = await makeWordPressGenericRequest('GET', 'wc/v3/products', queryParams, { auth: getWooAuth() });
 
       const products = Array.isArray(response)
         ? response.map(formatProductSummary)
