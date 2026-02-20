@@ -167,6 +167,104 @@ Data: ${JSON.stringify(error.response?.data || {}, null, 2)}
 }
 
 /**
+ * Make a request to any WordPress REST API namespace (e.g., wc/v3)
+ * Unlike makeWordPressRequest which is locked to /wp/v2/, this function
+ * can access any REST API namespace while reusing the same authentication.
+ * Supports optional auth override for APIs that require their own credentials
+ * (e.g., WooCommerce Consumer Key/Secret).
+ *
+ * @param method HTTP method
+ * @param namespacedEndpoint API endpoint relative to /wp-json/ (e.g., 'wc/v3/products')
+ * @param data Request data
+ * @param options Additional request options
+ * @returns Response data
+ */
+export async function makeWordPressGenericRequest(
+  method: string,
+  namespacedEndpoint: string,
+  data?: any,
+  options?: {
+    headers?: Record<string, string>;
+    rawResponse?: boolean;
+    auth?: { username: string; password: string };
+  }
+) {
+  if (!wpClient) {
+    throw new Error('WordPress client not initialized');
+  }
+
+  // Derive wp-json root from the existing baseURL (which ends with /wp/v2/)
+  const baseURL = wpClient.defaults.baseURL || '';
+  const wpJsonRoot = baseURL.replace(/wp\/v2\/?$/, '');
+
+  const cleanPath = namespacedEndpoint.startsWith('/') ? namespacedEndpoint.substring(1) : namespacedEndpoint;
+  const fullUrl = `${wpJsonRoot}${cleanPath}`;
+
+  logToFile(`Generic API Data: ${JSON.stringify(data, null, 2)}`);
+
+  try {
+    const requestHeaders: Record<string, string> = { ...(options?.headers || {}) };
+
+    // If auth override is provided, use it (e.g., WooCommerce Consumer Key/Secret)
+    if (options?.auth) {
+      const authStr = Buffer.from(`${options.auth.username}:${options.auth.password}`).toString('base64');
+      requestHeaders['Authorization'] = `Basic ${authStr}`;
+    }
+
+    const requestConfig: any = {
+      method,
+      url: fullUrl, // Absolute URL — Axios ignores baseURL for absolute URLs
+      headers: requestHeaders
+    };
+
+    if (method === 'GET') {
+      requestConfig.params = data;
+    } else if (['POST', 'PUT', 'PATCH'].includes(method)) {
+      requestConfig.data = JSON.stringify(data);
+      if (!requestConfig.headers['Content-Type']) {
+        requestConfig.headers['Content-Type'] = 'application/json';
+      }
+    } else {
+      requestConfig.data = data;
+    }
+
+    const requestLog = `
+GENERIC API REQUEST:
+URL: ${fullUrl}
+Method: ${method}
+Data: ${JSON.stringify(data, null, 2)}
+`;
+    logToFile(requestLog);
+
+    // If custom auth is provided, use raw axios to avoid wpClient's default auth headers
+    // Otherwise use wpClient which includes WordPress App Password auth
+    const response = options?.auth
+      ? await axios.request(requestConfig)
+      : await wpClient.request(requestConfig);
+
+    const responseLog = `
+GENERIC API RESPONSE:
+Status: ${response.status}
+Data: ${JSON.stringify(response.data, null, 2)}
+`;
+    logToFile(responseLog);
+
+    return options?.rawResponse ? response : response.data;
+  } catch (error: any) {
+    const errorLog = `
+GENERIC API ERROR:
+URL: ${fullUrl}
+Message: ${error.message}
+Status: ${error.response?.status || 'N/A'}
+Data: ${JSON.stringify(error.response?.data || {}, null, 2)}
+`;
+    console.error(errorLog);
+    logToFile(errorLog);
+    throw error;
+  }
+}
+
+/**
  * Make a request to the WordPress.org Plugin Repository API
  * @param searchQuery Search query string
  * @param page Page number (1-based)

@@ -82,7 +82,8 @@ async function findContentAcrossTypes(slug: string, contentTypes?: string[]) {
       
       const response = await makeWordPressRequest('GET', endpoint, {
         slug: slug,
-        per_page: 1
+        per_page: 1,
+        acf_format: 'standard'
       });
       
       if (Array.isArray(response) && response.length > 0) {
@@ -135,6 +136,7 @@ const createContentSchema = z.object({
   format: z.string().optional().describe("Content format"),
   menu_order: z.number().optional().describe("Menu order (for pages)"),
   meta: z.record(z.any()).optional().describe("Meta fields"),
+  acf: z.record(z.any()).optional().describe("ACF (Advanced Custom Fields) field values as key-value pairs (e.g., { ingredients: '...', volume: '100ml' })"),
   custom_fields: z.record(z.any()).optional().describe("Custom fields specific to this content type")
 });
 
@@ -154,6 +156,7 @@ const updateContentSchema = z.object({
   format: z.string().optional().describe("Content format"),
   menu_order: z.number().optional().describe("Menu order"),
   meta: z.record(z.any()).optional().describe("Meta fields"),
+  acf: z.record(z.any()).optional().describe("ACF (Advanced Custom Fields) field values as key-value pairs"),
   custom_fields: z.record(z.any()).optional().describe("Custom fields")
 });
 
@@ -242,7 +245,11 @@ export const unifiedContentHandlers = {
       const endpoint = getContentEndpoint(params.content_type);
       const { content_type, ...queryParams } = params;
       
-      const response = await makeWordPressRequest('GET', endpoint, queryParams);
+      // Always request ACF fields in standard format (requires ACF 5.11+ with REST API enabled)
+      const response = await makeWordPressRequest('GET', endpoint, {
+        ...queryParams,
+        acf_format: 'standard'
+      });
       
       return {
         toolResult: {
@@ -269,7 +276,10 @@ export const unifiedContentHandlers = {
   get_content: async (params: GetContentParams) => {
     try {
       const endpoint = getContentEndpoint(params.content_type);
-      const response = await makeWordPressRequest('GET', `${endpoint}/${params.id}`);
+      // Always request ACF fields in standard format
+      const response = await makeWordPressRequest('GET', `${endpoint}/${params.id}`, {
+        acf_format: 'standard'
+      });
       
       return {
         toolResult: {
@@ -316,12 +326,15 @@ export const unifiedContentHandlers = {
       
       // Add meta fields
       if (params.meta) contentData.meta = params.meta;
-      
+
+      // Add ACF fields (requires ACF REST API enabled)
+      if (params.acf) contentData.acf = params.acf;
+
       // Add custom fields
       if (params.custom_fields) {
         Object.assign(contentData, params.custom_fields);
       }
-      
+
       // Remove undefined values
       Object.keys(contentData).forEach(key => {
         if (contentData[key] === undefined) {
@@ -373,12 +386,15 @@ export const unifiedContentHandlers = {
       if (params.categories !== undefined) updateData.categories = params.categories;
       if (params.tags !== undefined) updateData.tags = params.tags;
       if (params.meta !== undefined) updateData.meta = params.meta;
-      
+
+      // Add ACF fields (requires ACF REST API enabled)
+      if (params.acf !== undefined) updateData.acf = params.acf;
+
       // Add custom fields
       if (params.custom_fields) {
         Object.assign(updateData, params.custom_fields);
       }
-      
+
       const response = await makeWordPressRequest('POST', `${endpoint}/${params.id}`, updateData);
       
       return {
