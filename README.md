@@ -284,9 +284,86 @@ src/
 - **Smart URL Resolution**: Automatically detect content types from URLs and find corresponding content
 - **Universal Content Management**: Single set of tools handles posts, pages, and custom post types
 - **Universal Taxonomy Management**: Single set of tools handles categories, tags, and custom taxonomies
+- **Token-Optimized Responses**: HTML/JSON cleaning reduces token usage by ~84% — SEO metadata, CSS attributes, duplicate image URLs, and non-content HTML tags are stripped automatically
 - **Type Safety**: Full TypeScript support with Zod schema validation
 - **Comprehensive Logging**: Detailed API request/response logging for debugging
 - **Error Handling**: Graceful error handling with informative messages
+
+### Response Optimization
+
+All content responses (`list_content`, `get_content`, `find_content_by_url`, `get_content_by_slug`) are automatically optimized for LLM consumption:
+
+**JSON fields removed** (confirmed unnecessary for LLM):
+- `yoast_head` / `yoast_head_json` — SEO metadata (~40% of raw payload)
+- `_links` — HAL hypermedia links
+- `guid`, `date_gmt`, `modified_gmt`, `ping_status`, `comment_status`, `class_list`
+
+**HTML cleaning** (in `content` and `excerpt`):
+- `srcset` / `data-srcset` / `sizes` — duplicate image URLs at multiple sizes removed
+- `class`, `style`, `id`, `data-*`, `aria-*` attributes — CSS/JS noise removed
+- `<script>`, `<style>` blocks — inline code removed
+- Non-content HTML tags stripped; `<img src>`, `<a href>`, `<video>` preserved
+- `title`, `content`, `excerpt` flattened from `{ rendered: "..." }` to plain strings
+- HTML entities decoded to readable text
+
+**Result**: 24 articles with full body text in ~29.5K tokens (vs ~182K tokens raw)
+
+#### Content Retrieval Guide
+
+**List content with body (single request, no pagination needed for <100 items):**
+```json
+{
+  "tool": "list_content",
+  "arguments": {
+    "content_type": "post",
+    "per_page": 30,
+    "orderby": "date",
+    "order": "desc"
+  }
+}
+```
+Response includes full body text for each item. No need to call `get_content` individually — body is already included in list responses.
+
+**Common content_type values:**
+- `post` — blog posts
+- `page` — static pages
+- `stories`, `news`, `press` — custom post types (use `discover_content_types` to find all available types)
+
+**Filtering examples:**
+```json
+{ "content_type": "post", "per_page": 10, "search": "skincare", "status": "publish" }
+{ "content_type": "post", "per_page": 50, "categories": 5, "orderby": "date", "order": "desc" }
+{ "content_type": "page", "per_page": 100, "parent": 0 }
+```
+
+**Get single content by ID:**
+```json
+{ "tool": "get_content", "arguments": { "content_type": "post", "id": 21919 } }
+```
+
+**Find content by URL (auto-detects content type):**
+```json
+{ "tool": "find_content_by_url", "arguments": { "url": "https://example.com/stories/my-article/" } }
+```
+
+**Response shape (per item):**
+```json
+{
+  "id": 21919,
+  "title": "Article Title (plain text)",
+  "content": "Cleaned body text with <img src=\"...\"> and <a href=\"...\">links</a> preserved",
+  "excerpt": "Short summary text",
+  "slug": "article-slug",
+  "date": "2025-11-21T18:16:45",
+  "modified": "2025-11-21T18:16:45",
+  "link": "https://example.com/stories/article-slug/",
+  "status": "publish",
+  "type": "stories",
+  "author": 1,
+  "featured_media": 12345,
+  "acf": {}
+}
+```
 
 ### Getting Started
 
