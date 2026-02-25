@@ -3,6 +3,148 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { makeWordPressRequest, logToFile } from '../wordpress.js';
 import { z } from 'zod';
 
+// ─── HTML / Response Cleaning ───────────────────────────────────────────────
+
+/**
+ * Clean HTML content for LLM consumption.
+ * Removes CSS/JS/srcset noise while preserving text, links, images, and videos.
+ */
+function cleanHtml(html: string): string {
+  if (!html) return '';
+  return html
+    // Remove <script> and <style> blocks entirely
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    // Remove srcset / sizes / data-srcset / data-sizes (duplicate image URLs, biggest waste)
+    .replace(/\s*srcset="[^"]*"/gi, '')
+    .replace(/\s*sizes="[^"]*"/gi, '')
+    .replace(/\s*data-srcset="[^"]*"/gi, '')
+    .replace(/\s*data-sizes="[^"]*"/gi, '')
+    .replace(/\s*data-src="[^"]*"/gi, '')
+    // Remove class, style, id attributes (CSS — useless for LLM)
+    .replace(/\s*class="[^"]*"/gi, '')
+    .replace(/\s*style="[^"]*"/gi, '')
+    .replace(/\s*id="[^"]*"/gi, '')
+    // Remove data-* attributes broadly
+    .replace(/\s*data-[a-z-]+="[^"]*"/gi, '')
+    // Remove aria-* and role attributes
+    .replace(/\s*aria-[a-z-]+="[^"]*"/gi, '')
+    .replace(/\s*role="[^"]*"/gi, '')
+    // Remove loading="lazy", decoding, fetchpriority attributes
+    .replace(/\s*loading="[^"]*"/gi, '')
+    .replace(/\s*decoding="[^"]*"/gi, '')
+    .replace(/\s*fetchpriority="[^"]*"/gi, '')
+    // Remove width/height attributes from img tags (layout info, not content)
+    .replace(/\s*width="[^"]*"/gi, '')
+    .replace(/\s*height="[^"]*"/gi, '')
+    // Remove any remaining attributes with leading space (catch-all for edge cases)
+    .replace(/\s+tabindex="[^"]*"/gi, '')
+    .replace(/\s+sizes="[^"]*"/gi, '')
+    // Strip all HTML tags except img, a, video (keep content-relevant tags)
+    .replace(/<(?!\/?(?:img|a|video)\b)[^>]+>/gi, '')
+    // Clean img tags: keep only src and alt
+    .replace(/<img\s[^>]*?\bsrc="([^"]*)"[^>]*?\balt="([^"]*)"[^>]*?\/?>/gi, '<img src="$1" alt="$2">')
+    .replace(/<img\s[^>]*?\balt="([^"]*)"[^>]*?\bsrc="([^"]*)"[^>]*?\/?>/gi, '<img src="$2" alt="$1">')
+    .replace(/<img\s[^>]*?\bsrc="([^"]*)"[^>]*?\/?>/gi, '<img src="$1">')
+    // Clean a tags: keep only href
+    .replace(/<a\s[^>]*?\bhref="([^"]*)"[^>]*?>/gi, '<a href="$1">')
+    // Decode HTML entities
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8216;/g, "'")
+    .replace(/&#8220;/g, '"')
+    .replace(/&#8221;/g, '"')
+    .replace(/&#8230;/g, '...')
+    .replace(/&#8211;/g, '–')
+    .replace(/&#8212;/g, '—')
+    .replace(/&#038;/g, '&')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    // Collapse whitespace
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Fields that are confirmed unnecessary for LLM consumption.
+ * These are stripped from every content response.
+ */
+const FIELDS_TO_REMOVE = [
+  'yoast_head',           // SEO meta HTML (~22% of payload)
+  'yoast_head_json',      // SEO structured data (~18% of payload)
+  '_links',               // HAL hypermedia links (~4%)
+  'guid',                 // Internal GUID
+  'date_gmt',             // Duplicate of date
+  'modified_gmt',         // Duplicate of modified
+  'ping_status',          // Pingback setting
+  'comment_status',       // Comment open/closed
+  'class_list',           // CSS class list
+  '_yoast_wpseo_estimated-reading-time-minutes',
+];
+
+/**
+ * Clean a single WordPress content item:
+ * 1. Remove bloated JSON fields
+ * 2. Clean HTML in rendered fields
+ * 3. Flatten title/content/excerpt from { rendered: "..." } to plain strings
+ */
+function cleanContentItem(item: any): any {
+  if (!item || typeof item !== 'object') return item;
+
+  const cleaned: any = {};
+
+  for (const [key, value] of Object.entries(item)) {
+    // Skip confirmed-unnecessary fields
+    if (FIELDS_TO_REMOVE.includes(key)) continue;
+
+    // Flatten and clean rendered fields
+    if (key === 'title' && value && typeof value === 'object' && 'rendered' in (value as any)) {
+      cleaned.title = (value as any).rendered
+        ?.replace(/<[^>]*>/g, '')
+        ?.replace(/&amp;/g, '&')
+        ?.replace(/&#8217;/g, "'")
+        ?.replace(/&#8216;/g, "'")
+        ?.replace(/&#8220;/g, '"')
+        ?.replace(/&#8221;/g, '"')
+        ?.replace(/&#8230;/g, '...')
+        ?.replace(/&#038;/g, '&')
+        ?.trim() || '';
+      continue;
+    }
+
+    if (key === 'content' && value && typeof value === 'object' && 'rendered' in (value as any)) {
+      cleaned.content = cleanHtml((value as any).rendered);
+      continue;
+    }
+
+    if (key === 'excerpt' && value && typeof value === 'object' && 'rendered' in (value as any)) {
+      cleaned.excerpt = cleanHtml((value as any).rendered);
+      continue;
+    }
+
+    // Keep everything else as-is
+    cleaned[key] = value;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Clean a WordPress API response (single item or array).
+ */
+function cleanContentResponse(response: any): any {
+  if (Array.isArray(response)) {
+    return response.map(cleanContentItem);
+  }
+  return cleanContentItem(response);
+}
+
+// ─── Cache for post types ───────────────────────────────────────────────────
+
 // Cache for post types to reduce API calls
 let postTypesCache: any = null;
 let cacheTimestamp: number = 0;
@@ -244,18 +386,18 @@ export const unifiedContentHandlers = {
     try {
       const endpoint = getContentEndpoint(params.content_type);
       const { content_type, ...queryParams } = params;
-      
+
       // Always request ACF fields in standard format (requires ACF 5.11+ with REST API enabled)
       const response = await makeWordPressRequest('GET', endpoint, {
         ...queryParams,
         acf_format: 'standard'
       });
-      
+
       return {
         toolResult: {
-          content: [{ 
-            type: 'text', 
-            text: JSON.stringify(response, null, 2) 
+          content: [{
+            type: 'text',
+            text: JSON.stringify(cleanContentResponse(response), null, 2)
           }],
           isError: false
         }
@@ -280,12 +422,12 @@ export const unifiedContentHandlers = {
       const response = await makeWordPressRequest('GET', `${endpoint}/${params.id}`, {
         acf_format: 'standard'
       });
-      
+
       return {
         toolResult: {
-          content: [{ 
-            type: 'text', 
-            text: JSON.stringify(response, null, 2) 
+          content: [{
+            type: 'text',
+            text: JSON.stringify(cleanContentResponse(response), null, 2)
           }],
           isError: false
         }
@@ -552,48 +694,48 @@ export const unifiedContentHandlers = {
           }
           
           const updatedContent = await makeWordPressRequest('POST', `${endpoint}/${content.id}`, updateData);
-          
+
           return {
             toolResult: {
-              content: [{ 
-                type: 'text', 
+              content: [{
+                type: 'text',
                 text: JSON.stringify({
                   found: true,
                   content_type: contentType,
                   content_id: content.id,
                   original_url: params.url,
                   updated: true,
-                  content: updatedContent
+                  content: cleanContentItem(updatedContent)
                 }, null, 2)
               }],
               isError: false
             }
           };
         }
-        
+
         return {
           toolResult: {
-            content: [{ 
-              type: 'text', 
+            content: [{
+              type: 'text',
               text: JSON.stringify({
                 found: true,
                 content_type: contentType,
                 content_id: content.id,
                 original_url: params.url,
-                content: content
+                content: cleanContentItem(content)
               }, null, 2)
             }],
             isError: false
           }
         };
       }
-      
+
       const { content, contentType } = result;
-      
+
       // Update if requested
       if (params.update_fields) {
         const endpoint = getContentEndpoint(contentType);
-        
+
         const updateData: any = {};
         if (params.update_fields.title !== undefined) updateData.title = params.update_fields.title;
         if (params.update_fields.content !== undefined) updateData.content = params.update_fields.content;
@@ -602,37 +744,37 @@ export const unifiedContentHandlers = {
         if (params.update_fields.custom_fields !== undefined) {
           Object.assign(updateData, params.update_fields.custom_fields);
         }
-        
+
         const updatedContent = await makeWordPressRequest('POST', `${endpoint}/${content.id}`, updateData);
-        
+
         return {
           toolResult: {
-            content: [{ 
-              type: 'text', 
+            content: [{
+              type: 'text',
               text: JSON.stringify({
                 found: true,
                 content_type: contentType,
                 content_id: content.id,
                 original_url: params.url,
                 updated: true,
-                content: updatedContent
+                content: cleanContentItem(updatedContent)
               }, null, 2)
             }],
             isError: false
           }
         };
       }
-      
+
       return {
         toolResult: {
-          content: [{ 
-            type: 'text', 
+          content: [{
+            type: 'text',
             text: JSON.stringify({
               found: true,
               content_type: contentType,
               content_id: content.id,
               original_url: params.url,
-              content: content
+              content: cleanContentItem(content)
             }, null, 2)
           }],
           isError: false
@@ -661,12 +803,12 @@ export const unifiedContentHandlers = {
       
       return {
         toolResult: {
-          content: [{ 
-            type: 'text', 
+          content: [{
+            type: 'text',
             text: JSON.stringify({
               found: true,
               content_type: result.contentType,
-              content: result.content
+              content: cleanContentItem(result.content)
             }, null, 2)
           }],
           isError: false
