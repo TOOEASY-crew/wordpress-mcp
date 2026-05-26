@@ -1,6 +1,6 @@
 {
   "name": "@junis/wordpress-mcp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A Model Context Protocol server for interacting with WordPress.",
   "type": "module",
   "main": "./build/server.js",
@@ -29,7 +29,7 @@
   "author": "TOOEASY",
   "license": "GPL-3.0-or-later",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.4.1",
+    "@modelcontextprotocol/sdk": "1.28.0",
     "axios": "^1.6.7",
     "dotenv": "^16.4.5",
     "fs-extra": "^11.2.0",
