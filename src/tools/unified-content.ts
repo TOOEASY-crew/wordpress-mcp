@@ -127,7 +127,7 @@ function cleanContentItem(item: any): any {
     }
 
     // Clean ACF fields — slim down bloated image objects and relation posts
-    if (key === 'acf' && value && typeof value === 'object') {
+    if (key === 'acf' && value && typeof value === 'object' && !Array.isArray(value)) {
       cleaned.acf = cleanAcfFields(value as Record<string, any>);
       continue;
     }
