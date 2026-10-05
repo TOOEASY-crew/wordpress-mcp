@@ -126,8 +126,98 @@ function cleanContentItem(item: any): any {
       continue;
     }
 
+    // Clean ACF fields — slim down bloated image objects and relation posts
+    if (key === 'acf' && value && typeof value === 'object') {
+      cleaned.acf = cleanAcfFields(value as Record<string, any>);
+      continue;
+    }
+
     // Keep everything else as-is
     cleaned[key] = value;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Detect if an object is a WordPress/ACF image attachment object.
+ * These contain 24+ fields but only url/alt are useful for LLM.
+ */
+function isAcfImageObject(obj: any): boolean {
+  return obj && typeof obj === 'object' && !Array.isArray(obj)
+    && typeof obj.url === 'string' && typeof obj.mime_type === 'string'
+    && obj.type === 'image';
+}
+
+/**
+ * Detect if an object is a WordPress post/relation object (from ACF relationship fields).
+ * These contain full post data but only ID/title/slug are useful.
+ */
+function isAcfPostObject(obj: any): boolean {
+  return obj && typeof obj === 'object' && !Array.isArray(obj)
+    && typeof obj.post_title === 'string' && typeof obj.post_type === 'string'
+    && 'post_status' in obj;
+}
+
+/**
+ * Slim down an ACF image object: keep only url, alt, width, height.
+ */
+function slimImageObject(img: any): any {
+  return {
+    url: img.url,
+    alt: img.alt || '',
+    width: img.width,
+    height: img.height,
+  };
+}
+
+/**
+ * Slim down an ACF post/relation object: keep only ID, title, slug, type.
+ */
+function slimPostObject(post: any): any {
+  return {
+    ID: post.ID,
+    post_title: post.post_title,
+    post_name: post.post_name,
+    post_type: post.post_type,
+  };
+}
+
+/**
+ * Recursively clean ACF field values:
+ * - Image objects → { url, alt, width, height }
+ * - Relation post objects → { ID, post_title, post_name, post_type }
+ * - Arrays → recurse each item
+ * - Nested objects with image/post children → recurse
+ */
+function cleanAcfFields(acf: Record<string, any>): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(acf)) {
+    if (value === null || value === undefined || value === '' || value === false) {
+      cleaned[key] = value;
+      continue;
+    }
+
+    if (isAcfImageObject(value)) {
+      cleaned[key] = slimImageObject(value);
+    } else if (isAcfPostObject(value)) {
+      cleaned[key] = slimPostObject(value);
+    } else if (Array.isArray(value)) {
+      cleaned[key] = value.map((item: any) => {
+        if (isAcfImageObject(item)) return slimImageObject(item);
+        if (isAcfPostObject(item)) return slimPostObject(item);
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          return cleanAcfFields(item);
+        }
+        return item;
+      });
+    } else if (typeof value === 'object' && !Array.isArray(value)) {
+      // Nested object — recurse to find embedded images/posts
+      cleaned[key] = cleanAcfFields(value);
+    } else {
+      cleaned[key] = value;
+    }
   }
 
   return cleaned;
